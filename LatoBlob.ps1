@@ -15,23 +15,29 @@ Connect-AzAccount -Identity
 
 ## Parameters to run log analytics query
 
-$laQuery = "MyRec_CL | where TimeGenerated > ago(7d) | as LaData;MyRec_CL | where TimeGenerated > ago(7d) | summarize  count() by IPAddress | as LaDataIps" 
+$laQuery = $env:laQuery 
 
-$WorkspaceID = "Add Workspace ID of Log Analytics"
+Write-Output $laQuery
 
-$storageAccName="StorageAccountName"
+$WorkspaceID = $env:WorkspaceID
 
-$ContainerName="ContainerName"  
+$storageAccName = $env:storageAccName
 
-## Function to run Query and get Csv Data             
+$ContainerName = $env:ContainerName  
+
+$appendqueryresults = $env:appendqueryresults
+
+## Function to run Query and get Csv Data     
+        
 Function Query {  
        if($laQuery -like "*;*"){
            Write-Host "Running For Multiple Search Query"
            $lasplit = $laQuery.split(';')         
+           Write-Output $lasplit
            $BlobNames += @()   
            foreach ($searchquery in $lasplit) { 
-                        $Lastwords = $searchquery.split('|')[-1]   ## To remove Pipe special charcters from Serch Query
-                        $Filename = $Lastwords.split(' ')[-1] ## To capture file name from the Search Query
+                        $Lastwords = $searchquery.split('|',[System.StringSplitOptions]::RemoveEmptyEntries)[-1]   ## To remove Pipe special charcter from Serch Query
+                        $Filename = $Lastwords.split(' ',[System.StringSplitOptions]::RemoveEmptyEntries)[-1] ## To capture file name from the Search Query
                         $Blobfile = "$Filename.csv"
                         $BlobNames += "$Filename.csv"
                         
@@ -41,24 +47,29 @@ Function Query {
                         ## BlobName
                         $Blob = $storageContainer | Get-AzureStorageBlob -Blob "$Blobfile" -ErrorAction Ignore | select Name      
                         
-                        ## Compares filename with Blob name                  
-                        if ($Blob.Name -eq "$Blobfile") {
-                              ## Loops each blob and gets content
-                              foreach($Blobs in $Blob.Name){
+                        ## Compares Blobfilename with filename passed in search query as output        
                                   
-                                      $storageContainer | Get-AzureStorageBlobContent  -Blob $Blobs -force
-                                      Write-Output $Blobs
+                        if (($Blob.Name -eq "$Blobfile") -and ($appendqueryresults -eq "True")) {
+
+                              ## Loops each blob in the container and gets content downloaded
+
+                              foreach($filename in $Blob.Name){
+                                  
+                                      $storageContainer | Get-AzureStorageBlobContent  -Blob $filename -force
+                                      
+                                      Write-Output $filename
 
                                       ## Append Results to existing Csv Files
+                                      
                                       $results = Invoke-AzureRmOperationalInsightsQuery -WorkspaceId $WorkspaceID -Query "$searchquery"
-                                      $results.Results | Export-CSV -Append -Path "$Blobs" -NoTypeInformation
+                                      $results.Results | Export-CSV -Append -Path "$filename" -NoTypeInformation
                                 }
                               
                         }
                         else {
-                                      ## Results to Csv Files new file will be created
+                                      ## Create a new CSV file with Results  
 
-                                      Write-Output "$Filename"                                
+                                      Write-Output "$Filename"                                                                   
                                       $results = Invoke-AzureRmOperationalInsightsQuery -WorkspaceId $WorkspaceID -Query "$searchquery" 
                                       $results.Results | Export-CSV -Path "$Filename.csv" -NoTypeInformation
 
@@ -73,8 +84,8 @@ Function Query {
 
                     Write-Host "Running For Single Search Query"
                     
-                    $Lastwords = $laQuery.split('|')[-1]   ## To remove Pipe special charcters from Serch Query
-                    $Filename = $Lastwords.split(' ')[-1]   ## To capture file name from the Search Query
+                    $Lastwords = $laQuery.split('|',[System.StringSplitOptions]::RemoveEmptyEntries)[-1]   ## To remove Pipe special charcters from Serch Query
+                    $Filename = $Lastwords.split(' ',[System.StringSplitOptions]::RemoveEmptyEntries)[-1]   ## To capture file name from the Search Query
                     $Blobfile = "$Filename.csv"
                     $BlobNames += "$Filename.csv"
                     
@@ -84,16 +95,21 @@ Function Query {
                     ## BlobName
                     $Blob = $storageContainer | Get-AzureStorageBlob -Blob "$Blobfile" -ErrorAction Ignore | select Name
 
-                    ## Compares filename with Blob name
-                    if ($Blob.Name -eq "$Blobfile") {
+                    ## Compares Blobfilename with filename passed in search query as output
+
+                    if (($Blob.Name -eq "$Blobfile") -and ($appendqueryresults -eq "True")) {
                     
                                   $storageContainer | Get-AzureStorageBlobContent  -Blob $Blob.Name -force
+                    
                                   ## Append Results to existing Csv Files
+                    
                                   $results = Invoke-AzureRmOperationalInsightsQuery -WorkspaceId $WorkspaceID -Query "$laQuery"
                                   $results.Results | Export-CSV -Append -Path "$Blobfile" -NoTypeInformation
                               
                     }else {
-                                  ## Results to Csv Files, a new file will be created ad will upload to storage                             
+                    
+                                   ## Create a new CSV file with Results                             
+                    
                                   $results = Invoke-AzureRmOperationalInsightsQuery -WorkspaceId $WorkspaceID -Query "$laQuery" 
                                   $results.Results | Export-CSV -Path "$Filename.csv" -NoTypeInformation
 
@@ -103,11 +119,13 @@ Function Query {
 
             foreach ($BlobFileName in $BlobNames)
             {
-               ## Uploading the files generated to blob storage base on Output files
+               ## Uploading the files generated to blob storage base on Output name passed in search query
+
                Write-Host $BlobFileName
                $storageContainer = Get-AzureRmStorageAccount | where {$_.StorageAccountName -eq "$storageAccName"} | Get-AzureStorageContainer $ContainerName
                $BlobName = ''
                $storageContainer | Set-AzureStorageBlobContent –File $BlobFileName –Blob $BlobName -Force
+               Write-Host "LatoBlob finished uploading $BlobFileName to Azure Blob Storage at TIME: $currentUTCtime"
           
             }   
 
